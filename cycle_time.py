@@ -14,7 +14,7 @@ Methodology:
   - Weekends + Portuguese public holidays excluded
   - Blocked AND Test Blocked both excluded from cycle time, tracked separately
   - Ready / To Do / Backlog etc. excluded (inactive)
-  - Tickets with status=Discarded are excluded from the query
+  - Tickets with status=Discarded and Epics are excluded from the query
 """
 
 import os
@@ -605,7 +605,8 @@ def run_report(year, month):
     jql = (
         f'project in ({", ".join(PROJECTS)}) '
         f'AND status changed to Done during ("{start}", "{end}") '
-        f'AND status != Discarded'
+        f'AND status != Discarded '
+        f'AND issuetype not in (Epic)'
     )
 
     print("\n1. Fetching issues...")
