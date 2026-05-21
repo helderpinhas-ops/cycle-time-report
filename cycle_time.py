@@ -40,6 +40,9 @@ SLACK_URL    = os.environ.get("SLACK_WEBHOOK_URL")
 PROJECTS  = ["CAECS", "GTM", "DTAL", "DTK"]
 TEAM_DEVS = {"CAECS": 4, "GTM": 2, "DTAL": 1, "DTK": 2}
 
+# Issue types excluded from all metrics
+EXCLUDED_ISSUE_TYPES = {"epic"}
+
 # Status classification
 INACTIVE_STATUSES = {
     "to do", "open", "backlog", "new",
@@ -611,7 +614,14 @@ def run_report(year, month):
 
     print("\n1. Fetching issues...")
     issues = get_all_issues(jql)
-    print(f"   ✅ {len(issues)} issues found")
+    # Double-filter: exclude Epics in case JQL issuetype filter is not applied
+    before = len(issues)
+    issues = [i for i in issues
+              if (i["fields"].get("issuetype") or {}).get("name", "").lower()
+              not in EXCLUDED_ISSUE_TYPES]
+    if before != len(issues):
+        print(f"   ⚠️  Excluded {before - len(issues)} Epic(s) — {len(issues)} remaining")
+    print(f"   ✅ {len(issues)} issues found (Epics excluded)")
 
     print("\n2. Fetching changelogs in parallel (10 threads)...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
