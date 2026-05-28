@@ -207,6 +207,60 @@ def get_changelog(issue_key):
         "ai_tools":     ai_tools,
     }
 
+# ── Open Bugs ─────────────────────────────────────────────────────────────────
+
+def get_open_bugs():
+    """
+    Fetch all open Bugs and Defects across the 4 projects.
+    Excludes: Done, Discarded, Ready for Production.
+    Returns dict with counts by project + priority breakdown.
+    """
+    jql = (
+        'project in (CAECS, GTM, DTAL, DTK) '
+        'AND issuetype in (Bug, Defect) '
+        'AND status not in (Done, Discarded, "Ready for Production")'
+    )
+    issues, page_token, page = [], None, 1
+    while True:
+        params = {
+            "jql":        jql,
+            "maxResults": 100,
+            "fields":     "project,priority,status",
+        }
+        if page_token:
+            params["nextPageToken"] = page_token
+        data  = jira_get("search/jql", params)
+        batch = data.get("issues", [])
+        issues.extend(batch)
+        if data.get("isLast", True) or not batch:
+            break
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+        page += 1
+
+    by_project  = {p: 0 for p in PROJECTS}
+    high_urgent = 0
+    blocked     = 0
+
+    for i in issues:
+        proj     = i["fields"]["project"]["key"]
+        priority = (i["fields"].get("priority") or {}).get("name", "").lower()
+        status   = i["fields"]["status"]["name"].lower()
+        if proj in by_project:
+            by_project[proj] += 1
+        if priority in ("high", "urgent"):
+            high_urgent += 1
+        if status == "blocked":
+            blocked += 1
+
+    return {
+        "total":       len(issues),
+        "by_project":  by_project,
+        "high_urgent": high_urgent,
+        "blocked":     blocked,
+    }
+
 # ── Cycle Time Calculation ─────────────────────────────────────────────────────
 
 def compute_cycle_time(histories):
@@ -568,6 +622,7 @@ Q4_GOALS = {
     "efficiency_min":      30,    # 30%–40%
     "efficiency_max":      40,
     "ai_assist":           50,    # 50%
+    "open_bugs":           5,     # < 5 total open bugs
 }
 
 def _goal_indicator(value, goal, lower_is_better=True):
@@ -647,6 +702,27 @@ def post_to_slack(report, confluence_url=None):
             f"        {rework_line}",
             f"        {eff_line}",
             f"        {ai_line}",
+            "",
+        ]
+
+    # ── Open Bugs ──
+    bugs        = report.get("open_bugs", {})
+    bugs_total  = bugs.get("total", "N/A")
+    bugs_goal   = Q4_GOALS["open_bugs"]
+    if isinstance(bugs_total, int):
+        bugs_indicator = " ✅" if bugs_total <= bugs_goal else " ⚠️"
+        by_proj_str = "  ·  ".join(
+            f"{proj}: {bugs['by_project'].get(proj, 0)}"
+            for proj in PROJECTS
+        )
+        hi_urg   = bugs.get("high_urgent", 0)
+        blocked  = bugs.get("blocked", 0)
+        hi_str   = f"  ·  High/Urgent: {hi_urg}" if hi_urg > 0 else ""
+        bl_str   = f"  ·  Blocked: {blocked}" if blocked > 0 else ""
+        lines += [
+            "*── Open Bugs & Defects ──*",
+            f"        Total: *{bugs_total}*{bugs_indicator} _(goal: <{bugs_goal})_",
+            f"        {by_proj_str}{hi_str}{bl_str}",
             "",
         ]
 
@@ -816,10 +892,17 @@ def run_report(year, month):
     print(f"{'─' * 55}")
     print("\n✅ Working days only · Ready, Blocked & Test Blocked excluded · PT holidays excluded")
 
-    print("\n4. Generating Excel...")
+    print("\n4. Fetching open bugs...")
+    open_bugs = get_open_bugs()
+    total_bugs = open_bugs["total"]
+    print(f"   ✅ {total_bugs} open bugs/defects found")
+    for proj, n in open_bugs["by_project"].items():
+        print(f"      {proj}: {n}")
+
+    print("\n5. Generating Excel...")
     excel_file = export_excel(results, all_tickets, year, month, weeks)
 
-    print("\n5. Uploading to Confluence...")
+    print("\n6. Uploading to Confluence...")
     confluence_url = upload_to_confluence(excel_file)
 
     return {
@@ -829,6 +912,7 @@ def run_report(year, month):
         "overall":  round(overall, 1),
         "weeks":    round(weeks, 1),
         "confluence_url": confluence_url,
+        "open_bugs": open_bugs,
     }
 
 # ── Entry point ────────────────────────────────────────────────────────────────
