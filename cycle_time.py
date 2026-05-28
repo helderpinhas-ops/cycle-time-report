@@ -560,33 +560,114 @@ def upload_to_confluence(filepath):
 
 # ── Slack ──────────────────────────────────────────────────────────────────────
 
+# ── Q4 Goals (update here each quarter) ───────────────────────────────────────
+Q4_GOALS = {
+    "lead_time_wd":        5.0,   # < 5wd
+    "throughput_growth":   20,    # +20% story pts per dev vs baseline
+    "rework_rate":         10,    # < 10%
+    "efficiency_min":      30,    # 30%–40%
+    "efficiency_max":      40,
+    "ai_assist":           50,    # 50%
+}
+
+def _goal_indicator(value, goal, lower_is_better=True):
+    """Returns a simple on/off-goal indicator."""
+    if value is None or goal is None:
+        return ""
+    on_goal = value <= goal if lower_is_better else value >= goal
+    return " ✅" if on_goal else " ⚠️"
+
+
 def post_to_slack(report, confluence_url=None):
     if not SLACK_URL:
         print("\n⚠️  SLACK_WEBHOOK_URL not set — skipping Slack post")
         return
 
-    def wa(projects):
+    def weighted_avg(projects):
         valid = [p for p in projects if p["avg"] is not None and p["count"] > 0]
         n = sum(p["count"] for p in valid)
         return f"{sum(p['avg']*p['count'] for p in valid)/n:.1f}" if n else "N/A"
 
     lines = [
         f"*📊 Monthly Cycle Time Report — {report['label']}*",
-        f"_Projects: {', '.join(PROJECTS)} | Working days · Ready/Blocked/Test Blocked excluded · weekends & 🇵🇹 PT holidays excluded_\n",
+        f"_Projects: {', '.join(PROJECTS)}_",
+        f"_Working days only · Weekends & PT holidays excluded · Ready/Blocked/Test Blocked excluded_",
+        "",
     ]
-    for p in report["projects"]:
-        avg  = f"*{p['avg']:.1f}wd*" if p["avg"] is not None else "N/A"
-        bl   = f" _(🚫 {p['avg_blocked']:.1f}wd blocked)_" if p["avg_blocked"] > 0 else ""
-        tput = (" · N/A SP" if p["sp_na"] else (f" · {p['throughput_sp']:.1f} SP/wk · {p['throughput_sp_dev']:.1f} SP/dev/wk" if p["throughput_sp"] is not None else ""))
-        rw   = f" · 🔁 {p['rework_rate']}%" if p["rework_rate"] is not None else ""
-        ai   = f" · 🤖 {p['ai_rate']}%" if p["ai_rate"] is not None else ""
-        eff  = f" · ⚡ Eff: {p['efficiency']}%" if p.get("efficiency") is not None else ""
-        lines.append(f"• *{p['project']}* — {p['count']} tickets — Cycle: {avg}{bl}{tput}{rw}{ai}{eff}")
 
-    lines.append(f"\n*Overall AVG: {wa(report['projects'])} wd* across {report['total']} tickets · {report['weeks']:.1f} working weeks")
-    lines.append("_Cycle time = active working days only (weekends & PT holidays excluded)_")
+    for p in report["projects"]:
+        # ── Lead Time ──
+        avg = p["avg"]
+        avg_str = f"{avg:.1f}wd" if avg is not None else "N/A"
+        goal_lt = Q4_GOALS["lead_time_wd"]
+        lt_indicator = _goal_indicator(avg, goal_lt, lower_is_better=True)
+        lead_time_line = f"Lead Time: *{avg_str}*{lt_indicator} _(goal: <{goal_lt}wd)_"
+
+        # ── Blocked ──
+        blocked_line = ""
+        if p["avg_blocked"] > 0:
+            blocked_line = f"\n        Blocked: {p['avg_blocked']:.1f}wd avg"
+
+        # ── Throughput ──
+        if p["sp_na"]:
+            tput_line = "Throughput: N/A (insufficient Story Points data)"
+        elif p["throughput_sp"] is not None:
+            tput_line = f"Throughput: *{p['throughput_sp']:.1f} SP/week* · {p['throughput_sp_dev']:.1f} SP/dev/week"
+        else:
+            tput_line = "Throughput: N/A"
+
+        # ── Rework Rate ──
+        rw = p["rework_rate"]
+        rw_str = f"{rw}%" if rw is not None else "N/A"
+        goal_rw = Q4_GOALS["rework_rate"]
+        rw_indicator = _goal_indicator(rw, goal_rw, lower_is_better=True)
+        rework_line = f"Rework Rate: *{rw_str}*{rw_indicator} _(goal: <{goal_rw}%)_ (Stories & Tasks only)"
+
+        # ── Efficiency ──
+        eff = p.get("efficiency")
+        eff_str = f"{eff}%" if eff is not None else "N/A"
+        if eff is not None:
+            on_goal = Q4_GOALS["efficiency_min"] <= eff <= Q4_GOALS["efficiency_max"]
+            eff_indicator = " ✅" if on_goal else " ⚠️"
+        else:
+            eff_indicator = ""
+        eff_line = f"Efficiency: *{eff_str}*{eff_indicator} _(goal: {Q4_GOALS['efficiency_min']}%–{Q4_GOALS['efficiency_max']}%)_"
+
+        # ── AI Assisted Code ──
+        ai = p["ai_rate"]
+        ai_str = f"{ai}%" if ai is not None else "N/A"
+        goal_ai = Q4_GOALS["ai_assist"]
+        ai_indicator = _goal_indicator(ai, goal_ai, lower_is_better=False)
+        ai_line = f"AI Assisted Code: *{ai_str}*{ai_indicator} _(goal: {goal_ai}%)_"
+
+        lines += [
+            f"*── {p['project']} ({p['count']} tickets) ──*",
+            f"        {lead_time_line}{blocked_line}",
+            f"        {tput_line}",
+            f"        {rework_line}",
+            f"        {eff_line}",
+            f"        {ai_line}",
+            "",
+        ]
+
+    # ── Overall ──
+    ov = weighted_avg(report["projects"])
+    goal_lt = Q4_GOALS["lead_time_wd"]
+    try:
+        ov_float = float(ov)
+        ov_indicator = " ✅" if ov_float <= goal_lt else " ⚠️"
+    except ValueError:
+        ov_indicator = ""
+
+    lines += [
+        f"*── Overall ──*",
+        f"        Lead Time AVG: *{ov}wd*{ov_indicator} _(goal: <{goal_lt}wd)_ across {report['total']} tickets · {report['weeks']:.1f} working weeks",
+        "",
+        "_Cycle time = active working days (In Progress and equivalent statuses)_",
+    ]
+
     if confluence_url:
-        lines.append(f"\n📎 *Full breakdown:* <{confluence_url}|Download Excel from Confluence>")
+        lines.append(f"\n📎 *Full breakdown (Excel):* <{confluence_url}|Download from Confluence>")
 
     r = requests.post(SLACK_URL, json={"text": "\n".join(lines)}, timeout=10)
     r.raise_for_status()
