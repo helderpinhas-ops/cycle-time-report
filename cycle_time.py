@@ -42,7 +42,7 @@ PROJECTS  = ["CAECS", "GTM", "DTAL", "DTK"]
 TEAM_DEVS = {"CAECS": 4, "GTM": 2, "DTAL": 1, "DTK": 2}
 
 # Issue types excluded from all metrics
-EXCLUDED_ISSUE_TYPES = {"epic"}
+EXCLUDED_ISSUE_TYPES = {"epic", "bug", "defect"}
 
 # Status classification
 INACTIVE_STATUSES = {
@@ -812,14 +812,14 @@ def run_report(year, month):
 
     print(f"\n📊 Cycle Time Report — {label}  ({weeks:.1f} working weeks)")
     print("=" * 60)
-    print("⚙️  Filter: SP > 0 OR Fix Version filled · Epics & Discarded excluded")
+    print("⚙️  Filter: SP > 0 OR Fix Version filled · Epics, Bugs, Defects & Discarded excluded")
     print("=" * 60)
 
     jql = (
         f'project in ({", ".join(PROJECTS)}) '
         f'AND status changed to Done during ("{start}", "{end}") '
         f'AND status != Discarded '
-        f'AND issuetype not in (Epic)'
+        f'AND issuetype not in (Epic, Bug, Defect)'
     )
 
     print("\n1. Fetching & filtering issues...")
