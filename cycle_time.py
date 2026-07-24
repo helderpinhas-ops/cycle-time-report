@@ -16,6 +16,8 @@ Methodology:
   - Blocked AND Test Blocked both excluded from cycle time, tracked separately
   - Ready / To Do / Backlog etc. excluded (inactive)
   - Epics and Discarded tickets are excluded from all metrics
+  - Cycle end = "Done" OR "Ready for Production"
+  - Report = weekly, looking at the last 12 weeks
 """
 
 import os
@@ -51,7 +53,7 @@ INACTIVE_STATUSES = {
 }
 # Both "blocked" AND "test blocked" excluded from cycle time, tracked separately
 BLOCKED_STATUSES = {"blocked", "test blocked"}
-DONE_STATUSES    = {"done", "closed", "resolved"}
+DONE_STATUSES    = {"done", "closed", "resolved", "ready for production"}
 
 AUTH    = (JIRA_EMAIL, JIRA_TOKEN)
 HEADERS = {"Accept": "application/json"}
@@ -428,8 +430,8 @@ def la(): return Alignment(horizontal="left",   vertical="center", wrap_text=Tru
 def fl(c): return PatternFill("solid", start_color=c, fgColor=c)
 
 
-def export_excel(results, tickets, year, month, weeks):
-    label = datetime(year, month, 1).strftime("%B %Y")
+def export_excel(results, tickets, label, weeks, end_dt):
+    pass_through = end_dt  # used for filename
     wb    = Workbook()
 
     # ── Sheet 1: Summary ──────────────────────────────────────────────────────
@@ -443,9 +445,9 @@ def export_excel(results, tickets, year, month, weeks):
     ws.row_dimensions[1].height = 30
 
     ws.merge_cells("A2:H2")
-    ws["A2"] = ("Working days only · Ready, Blocked & Test Blocked excluded · "
-                "weekends & 🇵🇹 PT holidays excluded · "
-                "only tickets with SP > 0 or Fix Version")
+    ws["A2"] = ("Working days only · Done OR Ready for Production · "
+                "Blocked & Test Blocked excluded · weekends & 🇵🇹 PT holidays excluded · "
+                "SP > 0 or Fix Version · last 12 weeks")
     ws["A2"].font = Font(name="Arial", italic=True, size=10, color="94A3B8")
     ws["A2"].fill = fl(C_HEADER); ws["A2"].alignment = ca()
     ws.row_dimensions[2].height = 16
@@ -625,7 +627,7 @@ def export_excel(results, tickets, year, month, weeks):
         ws_p.column_dimensions["H"].width = 80
         ws_p.freeze_panes = "A3"
 
-    filename = f"cycle_time_report_{year}_{month:02d}.xlsx"
+    filename = f"cycle_time_report_w{end_dt.strftime('%Y%m%d')}_12wk.xlsx"
     wb.save(filename)
     print(f"\n📁 Excel saved: {filename}")
     return filename
@@ -784,13 +786,26 @@ def post_to_slack(report, confluence_url=None):
     except ValueError:
         ov_ind = ""
 
+    # ── Lead Time ≤5wd % ──
+    lt5_pct   = report.get("lt5_pct")
+    lt5_count = report.get("lt5_count", 0)
+    lt5_goal  = 80  # Daniela's V2MOM goal: 80% of all work ≤5wd
+    if lt5_pct is not None:
+        lt5_ind = " ✅" if lt5_pct >= lt5_goal else " ⚠️"
+        lt5_line = (f"        Lead Time ≤5wd: *{lt5_pct}%*{lt5_ind} "
+                    f"_(goal: ≥{lt5_goal}%)_ "
+                    f"— {lt5_count}/{report['total']} tickets")
+    else:
+        lt5_line = f"        Lead Time ≤5wd: N/A"
+
     lines += [
         "*── Overall ──*",
         f"        Lead Time AVG: *{ov}wd*{ov_ind} _(goal: <{goal_lt}wd)_ "
         f"across {report['total']} tickets · {report['weeks']:.1f} working weeks",
+        lt5_line,
         "",
-        "_Cycle time = active working days · SP > 0 or Fix Version · "
-        "In Progress and equivalent statuses_",
+        f"_Cycle time = active working days · SP > 0 or Fix Version · "
+        f"Done or Ready for Production · last 12 weeks ({report['weeks']:.1f} working weeks)_",
     ]
 
     if confluence_url:
@@ -803,21 +818,37 @@ def post_to_slack(report, confluence_url=None):
 
 # ── Report ─────────────────────────────────────────────────────────────────────
 
-def run_report(year, month):
-    _, last_day = monthrange(year, month)
-    start = f"{year}-{month:02d}-01"
-    end   = f"{year}-{month:02d}-{last_day}"
-    label = datetime(year, month, 1).strftime("%B %Y")
+def run_report(week_end_date=None):
+    """
+    Weekly report covering the last 12 weeks up to week_end_date (default: today).
+    Tickets are included if their status changed to Done OR Ready for Production
+    during that 12-week window.
+    """
+    if week_end_date is None:
+        week_end_date = date.today()
+
+    end_dt   = week_end_date
+    start_dt = end_dt - timedelta(weeks=12)
+
+    start = start_dt.strftime("%Y-%m-%d")
+    end   = end_dt.strftime("%Y-%m-%d")
+    label = f"W/E {end_dt.strftime('%b %d, %Y')} (last 12 weeks)"
     weeks = working_weeks_in_range(start, end)
 
+    # Also expose year/month for Excel filename (use end week)
+    year  = end_dt.year
+    month = end_dt.month
+
     print(f"\n📊 Cycle Time Report — {label}  ({weeks:.1f} working weeks)")
+    print(f"    Period: {start} → {end}")
     print("=" * 60)
-    print("⚙️  Filter: SP > 0 OR Fix Version filled · Epics, Bugs, Defects & Discarded excluded")
+    print("⚙️  Filter: SP > 0 OR Fix Version · Epics, Bugs, Defects & Discarded excluded")
+    print("⚙️  Done = \"Done\", \"Closed\", \"Resolved\" OR \"Ready for Production\"")
     print("=" * 60)
 
     jql = (
         f'project in ({", ".join(PROJECTS)}) '
-        f'AND status changed to Done during ("{start}", "{end}") '
+        f'AND status changed to ("Done", "Ready for Production") during ("{start}", "{end}") '
         f'AND status != Discarded '
         f'AND issuetype not in (Epic, Bug, Defect)'
     )
@@ -939,9 +970,16 @@ def run_report(year, month):
               else f"{proj:<10} {len(items):>7}  {'—':>9}")
 
     overall = total_w / total_n if total_n else 0
+
+    # ── % tickets with Lead Time ≤ 5wd (Daniela's V2MOM goal: 80%) ──────────
+    lt5_count = sum(1 for t in all_tickets if t["cycle"] <= 5.0)
+    lt5_pct   = round(lt5_count / total_n * 100) if total_n > 0 else None
+
     print(f"{'─' * 60}")
     print(f"{'OVERALL':<10} {total_n:>7}  {overall:>9.1f}wd")
     print(f"{'─' * 60}")
+    lt5_str = f"{lt5_pct}%" if lt5_pct is not None else "N/A"
+    print(f"\n📐 Lead Time ≤5wd: {lt5_count}/{total_n} tickets ({lt5_str}) — goal: ≥80%")
     print("\n✅ Working days only · SP > 0 or Fix Version · "
           "Ready, Blocked & Test Blocked excluded · PT holidays excluded")
 
@@ -952,7 +990,7 @@ def run_report(year, month):
         print(f"      {proj}: {n}")
 
     print("\n5. Generating Excel...")
-    excel_file = export_excel(results, all_tickets, year, month, weeks)
+    excel_file = export_excel(results, all_tickets, label, weeks, end_dt)
 
     print("\n6. Uploading to Confluence...")
     confluence_url = upload_to_confluence(excel_file)
@@ -963,6 +1001,8 @@ def run_report(year, month):
         "total":          total_n,
         "overall":        round(overall, 1),
         "weeks":          round(weeks, 1),
+        "lt5_pct":        lt5_pct,
+        "lt5_count":      lt5_count,
         "confluence_url": confluence_url,
         "open_bugs":      open_bugs,
     }
@@ -972,12 +1012,13 @@ def run_report(year, month):
 
 if __name__ == "__main__":
     import sys
-    today = date.today()
-    year  = today.year if today.month > 1 else today.year - 1
-    month = today.month - 1 or 12
 
-    if len(sys.argv) == 3:
-        year, month = int(sys.argv[1]), int(sys.argv[2])
+    # Default: run for last 12 weeks ending today
+    # Optional override: python cycle_time.py 2026-07-03  (end date in YYYY-MM-DD)
+    if len(sys.argv) == 2:
+        week_end = date.fromisoformat(sys.argv[1])
+    else:
+        week_end = date.today()
 
-    report = run_report(year, month)
+    report = run_report(week_end_date=week_end)
     post_to_slack(report, confluence_url=report.get("confluence_url"))
