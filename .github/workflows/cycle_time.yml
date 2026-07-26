@@ -6,23 +6,34 @@ on:
   workflow_dispatch:       # Allow manual trigger from GitHub UI
 
 jobs:
-  report:
+  cycle-time:
+    name: Cycle Time Report (last 12 weeks)
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install requests python-dateutil openpyxl
-
-      - name: Run Weekly Cycle Time Report (last 12 weeks)
+      - run: pip install requests python-dateutil openpyxl
+      - name: Run Cycle Time Report
         run: python cycle_time.py
+        env:
+          JIRA_EMAIL:        ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN:    ${{ secrets.JIRA_API_TOKEN }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  bug-sla:
+    name: Bug SLA Report (Urgent & High)
+    runs-on: ubuntu-latest
+    needs: cycle-time   # runs after cycle time so Slack messages arrive in order
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests python-dateutil
+      - name: Run Bug SLA Report
+        run: python bug_sla.py
         env:
           JIRA_EMAIL:        ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN:    ${{ secrets.JIRA_API_TOKEN }}
