@@ -414,7 +414,158 @@ def compute_cycle_time(histories):
     return round(cycle_wd, 1), round(blocked_wd, 1), round(in_progress_wd, 1), status_log
 
 
-# ── Excel Export ───────────────────────────────────────────────────────────────
+
+# ── Bug SLA Excel Sheet ────────────────────────────────────────────────────────
+
+PROJECTS_ORDER = ["CAECS", "GTM", "DTAL", "DTK"]
+
+def _add_bug_sla_sheet(wb, bug_data):
+    """Add a Bug SLA sheet to the workbook from bug_sla_results.json data."""
+    ws = wb.create_sheet("🐛 Bug SLA")
+
+    # Styles (reuse helpers already defined in this file)
+    C_URGNT = "FFF0F0"; C_HIGH = "FFF8E8"; C_OK = "D4EDDA"
+    C_WARN  = "FFF3CD"; C_FAIL = "F8D7DA"
+
+    # ── Title ──
+    ws.merge_cells("A1:J1")
+    ws["A1"] = f"🐛 Bug SLA Report — {bug_data.get('label', '')}"
+    ws["A1"].font      = Font(name="Arial", bold=True, size=13, color="FFFFFF")
+    ws["A1"].fill      = fl("1E2433")
+    ws["A1"].alignment = ca()
+    ws.row_dimensions[1].height = 28
+
+    ws.merge_cells("A2:J2")
+    ws["A2"] = ("Urgent: ≤6 business hours (goal ≥90%)  ·  "
+                "High: ≤12 business hours / 1.5 days (goal ≥75%)  ·  "
+                "Labels: jira_escalated or kanban  ·  PT holidays excluded")
+    ws["A2"].font      = Font(name="Arial", italic=True, size=10, color="94A3B8")
+    ws["A2"].fill      = fl("1E2433")
+    ws["A2"].alignment = ca()
+    ws.row_dimensions[2].height = 16
+
+    # ── Summary table ──────────────────────────────────────────────────────────
+    ws.merge_cells("A3:J3")
+    ws["A3"] = "Summary"
+    ws["A3"].font = Font(name="Arial", bold=True, size=11)
+    ws["A3"].fill = fl("2D3748")
+    ws["A3"].font = Font(name="Arial", bold=True, color="FFFFFF", size=11)
+    ws["A3"].alignment = ca()
+    ws.row_dimensions[3].height = 20
+
+    sum_hdrs = ["Project", "Priority", "Resolved",
+                "Within SLA", "SLA %", "Goal", "Status",
+                "Avg BH", "Open", "Breaching SLA"]
+    for col, h in enumerate(sum_hdrs, 1):
+        c = ws.cell(row=4, column=col, value=h)
+        c.font = Font(name="Arial", bold=True, color="FFFFFF", size=10)
+        c.fill = fl("2D3748"); c.alignment = ca(); c.border = bdr()
+    ws.row_dimensions[4].height = 20
+
+    row = 5
+    for proj in PROJECTS_ORDER:
+        pdata = bug_data["projects"].get(proj, {})
+        for prio_key, prio_label, goal_h, goal_pct in [
+            ("urgent", "Urgent", 6,  90),
+            ("high",   "High",   12, 75),
+        ]:
+            stats = pdata.get(prio_key)
+            bg    = fl(C_URGNT if prio_key == "urgent" else C_HIGH)
+
+            if stats and stats.get("total", 0) > 0:
+                pct       = stats["pct"]
+                on_target = stats["on_target"]
+                status_v  = "✅ On target" if on_target else "⚠️ Below target"
+                sfill     = fl(C_OK) if on_target else fl(C_FAIL)
+                vals = [
+                    proj, prio_label,
+                    stats["total"], stats["within_sla"],
+                    f"{pct}%", f"≥{goal_pct}%",
+                    status_v,
+                    f"{stats['avg_bh']}h",
+                    stats["open"],
+                    stats["breaching"],
+                ]
+            else:
+                vals = [proj, prio_label, 0, 0, "N/A",
+                        f"≥{goal_pct}%", "No data", "—", "—", "—"]
+                sfill = bg
+
+            for col, val in enumerate(vals, 1):
+                c = ws.cell(row=row, column=col, value=val)
+                c.font = Font(name="Arial", size=10)
+                c.fill = sfill if col == 7 else bg
+                c.alignment = ca() if col != 1 else la()
+                c.border = bdr()
+            ws.row_dimensions[row].height = 18
+            row += 1
+
+    row += 1  # blank separator
+
+    # ── Detail table — all bugs ───────────────────────────────────────────────
+    ws.merge_cells(f"A{row}:J{row}")
+    ws.cell(row=row, column=1, value="Individual Bugs")
+    ws.cell(row=row, column=1).font = Font(name="Arial", bold=True, color="FFFFFF", size=11)
+    ws.cell(row=row, column=1).fill = fl("2D3748")
+    ws.cell(row=row, column=1).alignment = ca()
+    ws.row_dimensions[row].height = 20
+    row += 1
+
+    det_hdrs = ["Jira Key", "Project", "Priority", "Summary",
+                "Status", "Created", "Resolved", "BH Elapsed",
+                "SLA Limit", "SLA Status"]
+    for col, h in enumerate(det_hdrs, 1):
+        c = ws.cell(row=row, column=col, value=h)
+        c.font = Font(name="Arial", bold=True, color="FFFFFF", size=10)
+        c.fill = fl("2D3748"); c.alignment = ca(); c.border = bdr()
+    ws.row_dimensions[row].height = 20
+    row += 1
+
+    for proj in PROJECTS_ORDER:
+        pdata = bug_data["projects"].get(proj, {})
+        bugs  = sorted(pdata.get("bugs", []),
+                       key=lambda b: (b["priority"], -b["bh"]))
+        for idx, bug in enumerate(bugs):
+            prio = bug["priority"]
+            sla_h = 6 if prio == "urgent" else 12 if prio == "high" else None
+            within = (bug["bh"] <= sla_h) if sla_h else None
+            bg = fl("F7F8FC" if idx % 2 == 0 else "FFFFFF")
+
+            sla_status = ("✅ Within" if within else
+                          "⚠️ Breaching" if (not within and bug["in_flight"]) else
+                          "❌ Exceeded") if sla_h else "—"
+
+            # Key with hyperlink
+            from openpyxl.styles import Font as _Font
+            kc = ws.cell(row=row, column=1, value=bug["key"])
+            kc.hyperlink  = f"https://outsystemsrd.atlassian.net/browse/{bug['key']}"
+            kc.font       = Font(name="Arial", size=10, color="4A6CF7", underline="single")
+            kc.fill = bg; kc.alignment = ca(); kc.border = bdr()
+
+            det_vals = [
+                proj, prio.capitalize(), bug["summary"],
+                bug["status"], bug["created"], bug["resolved"],
+                f"{bug['bh']}h",
+                f"≤{sla_h}h" if sla_h else "—",
+                sla_status,
+            ]
+            for col, val in enumerate(det_vals, 2):
+                c = ws.cell(row=row, column=col, value=val)
+                c.font = Font(name="Arial", size=10)
+                c.fill = bg
+                c.alignment = la() if col == 4 else ca()
+                c.border = bdr()
+            ws.row_dimensions[row].height = 18
+            row += 1
+
+    # Column widths
+    for col, w in zip("ABCDEFGHIJ",
+                      [13, 10, 10, 55, 18, 13, 13, 10, 10, 15]):
+        ws.column_dimensions[get_column_letter(col)].width = w
+    ws.freeze_panes = "A5"
+
+
+# ── Excel Export ────────────────────────────────────────────────────────────────
 
 C_HEADER = "1E2433"; C_PROJ = "2D3748"; C_ALT = "F7F8FC"; C_WHITE = "FFFFFF"
 C_SUMMARY = "EBF4FF"
@@ -626,6 +777,18 @@ def export_excel(results, tickets, label, weeks, end_dt):
         ws_p.column_dimensions["G"].width = 10
         ws_p.column_dimensions["H"].width = 80
         ws_p.freeze_panes = "A3"
+
+    # ── Sheet: Bug SLA (if bug_sla_results.json exists) ──────────────────────
+    import json as _json, os as _os
+    bug_json = "bug_sla_results.json"
+    if _os.path.exists(bug_json):
+        try:
+            with open(bug_json) as f:
+                bug_data = _json.load(f)
+            _add_bug_sla_sheet(wb, bug_data)
+            print("   📋 Bug SLA sheet added")
+        except Exception as e:
+            print(f"   ⚠️  Could not add Bug SLA sheet: {e}")
 
     filename = f"cycle_time_report_w{end_dt.strftime('%Y%m%d')}_12wk.xlsx"
     wb.save(filename)
