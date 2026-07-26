@@ -6,34 +6,43 @@ on:
   workflow_dispatch:       # Allow manual trigger from GitHub UI
 
 jobs:
-  cycle-time:
-    name: Cycle Time Report (last 12 weeks)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: pip install requests python-dateutil openpyxl
-      - name: Run Cycle Time Report
-        run: python cycle_time.py
-        env:
-          JIRA_EMAIL:        ${{ secrets.JIRA_EMAIL }}
-          JIRA_API_TOKEN:    ${{ secrets.JIRA_API_TOKEN }}
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
   bug-sla:
     name: Bug SLA Report (Urgent & High)
     runs-on: ubuntu-latest
-    needs: cycle-time   # runs after cycle time so Slack messages arrive in order
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - run: pip install requests python-dateutil
-      - name: Run Bug SLA Report
+      - name: Run Bug SLA — generates bug_sla_results.json + Slack post
         run: python bug_sla.py
+        env:
+          JIRA_EMAIL:        ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN:    ${{ secrets.JIRA_API_TOKEN }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      - name: Upload bug_sla_results.json as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bug-sla-results
+          path: bug_sla_results.json
+
+  cycle-time:
+    name: Cycle Time Report (last 12 weeks)
+    runs-on: ubuntu-latest
+    needs: bug-sla   # runs after bug-sla so JSON is ready
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests python-dateutil openpyxl
+      - name: Download bug_sla_results.json
+        uses: actions/download-artifact@v4
+        with:
+          name: bug-sla-results
+      - name: Run Cycle Time Report — includes Bug SLA sheet in Excel
+        run: python cycle_time.py
         env:
           JIRA_EMAIL:        ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN:    ${{ secrets.JIRA_API_TOKEN }}
