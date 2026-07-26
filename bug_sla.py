@@ -292,6 +292,28 @@ def run_bug_sla():
             else:
                 print(f"    {prio}: No resolved bugs")
 
+    # Save results to JSON for cycle_time.py to pick up
+    import json
+    json_path = "bug_sla_results.json"
+    # Serialise — remove non-serialisable bug list detail, keep stats only
+    export = {
+        "label":    label,
+        "projects": {
+            proj: {
+                "urgent": data["urgent"],
+                "high":   data["high"],
+                "bugs": [
+                    {k: v for k, v in b.items()}
+                    for b in data["bugs"]
+                ],
+            }
+            for proj, data in project_results.items()
+        }
+    }
+    with open(json_path, "w") as f:
+        json.dump(export, f, indent=2)
+    print(f"\n📄 Results saved to {json_path}")
+
     return {"label": label, "projects": project_results}
 
 # ── Slack message ──────────────────────────────────────────────────────────────
