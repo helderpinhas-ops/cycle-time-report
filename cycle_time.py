@@ -131,7 +131,7 @@ def working_weeks_in_range(start_str, end_str):
 def jira_get(path, params=None):
     r = requests.get(
         f"{JIRA_BASE}/{path}",
-        params=params, auth=AUTH, headers=HEADERS, timeout=30
+        params=params, auth=AUTH, headers=HEADERS, timeout=60
     )
     r.raise_for_status()
     return r.json()
