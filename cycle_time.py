@@ -761,8 +761,7 @@ def run_report(week_end_date=None):
 
     jql = (
         f'project in ({", ".join(PROJECTS)}) '
-        f'AND (status changed to "Done" during ("{start}", "{end}") '
-        f'OR status changed to "Ready for Production" during ("{start}", "{end}")) '
+        f'AND status changed to Done during ("{start}", "{end}") '
         f'AND status != Discarded '
         f'AND issuetype not in (Epic, Bug, Defect)'
     )
