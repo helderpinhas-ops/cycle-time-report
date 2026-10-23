@@ -153,7 +153,8 @@ def get_all_issues(jql):
                           "customfield_10004,customfield_10016,"
                           "customfield_16256,"
                           "customfield_21332,"
-                          "customfield_10014",  # epic link (parent epic key)
+                          "customfield_10014,"  # epic link (older Jira)
+                          "parent",             # parent epic (newer Jira next-gen)
         }
         if page_token:
             params["nextPageToken"] = page_token
@@ -193,12 +194,21 @@ def get_all_issues(jql):
         print(f"  ⚙️  Excluded {before2 - len(filtered)} ticket(s) with ExcludeFromLeadTime label"
               f" → {len(filtered)} remaining")
 
-    # Collect epic keys referenced by remaining tickets (customfield_10014)
+    # Collect epic keys referenced by remaining tickets
+    # Supports both older (customfield_10014) and newer Jira (parent field)
     epic_keys = set()
     for i in filtered:
+        # Try customfield_10014 first (classic Epic Link)
         ek = i["fields"].get("customfield_10014")
+        if not ek:
+            # Try parent field (next-gen / company-managed projects)
+            parent = i["fields"].get("parent") or {}
+            parent_type = (parent.get("fields") or {}).get("issuetype", {}).get("name", "").lower()
+            if parent_type == "epic":
+                ek = parent.get("key")
         if ek:
             epic_keys.add(ek)
+            i["_epic_key"] = ek  # cache for later filtering
 
     # Fetch labels for each epic and build exclusion set
     excluded_epics = set()
@@ -218,7 +228,7 @@ def get_all_issues(jql):
     if excluded_epics:
         before3 = len(filtered)
         filtered = [i for i in filtered
-                    if i["fields"].get("customfield_10014") not in excluded_epics]
+                    if i.get("_epic_key") not in excluded_epics]
         if before3 != len(filtered):
             print(f"  ⚙️  Excluded {before3 - len(filtered)} ticket(s) via epic ExcludeFromLeadTime"
                   f" → {len(filtered)} remaining")
