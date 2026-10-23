@@ -149,10 +149,11 @@ def get_all_issues(jql):
             "jql":        jql,
             "maxResults": 100,
             "fields":     "summary,project,created,resolutiondate,issuetype,"
-                          "fixVersions,"
+                          "fixVersions,labels,"
                           "customfield_10004,customfield_10016,"
                           "customfield_16256,"
-                          "customfield_21332",
+                          "customfield_21332,"
+                          "customfield_10014",  # epic link (parent epic key)
         }
         if page_token:
             params["nextPageToken"] = page_token
@@ -182,6 +183,46 @@ def get_all_issues(jql):
     if excluded > 0:
         print(f"  ⚙️  Filtered out {excluded} ticket(s) with no SP and no Fix Version "
               f"→ {len(filtered)} remaining")
+
+    # ── ExcludeFromLeadTime label filter ──────────────────────────────────
+    # Exclude tickets with label ExcludeFromLeadTime on themselves
+    before2 = len(filtered)
+    filtered = [i for i in filtered
+                if "ExcludeFromLeadTime" not in (i["fields"].get("labels") or [])]
+    if before2 != len(filtered):
+        print(f"  ⚙️  Excluded {before2 - len(filtered)} ticket(s) with ExcludeFromLeadTime label"
+              f" → {len(filtered)} remaining")
+
+    # Collect epic keys referenced by remaining tickets (customfield_10014)
+    epic_keys = set()
+    for i in filtered:
+        ek = i["fields"].get("customfield_10014")
+        if ek:
+            epic_keys.add(ek)
+
+    # Fetch labels for each epic and build exclusion set
+    excluded_epics = set()
+    if epic_keys:
+        print(f"  🔍 Checking {len(epic_keys)} epic(s) for ExcludeFromLeadTime label...")
+        for ek in epic_keys:
+            try:
+                epic_data = jira_get(f"issue/{ek}", {"fields": "labels"})
+                epic_labels = epic_data.get("fields", {}).get("labels") or []
+                if "ExcludeFromLeadTime" in epic_labels:
+                    excluded_epics.add(ek)
+            except Exception:
+                pass  # skip if epic not accessible
+        if excluded_epics:
+            print(f"  ⚙️  Epics with ExcludeFromLeadTime: {excluded_epics}")
+
+    if excluded_epics:
+        before3 = len(filtered)
+        filtered = [i for i in filtered
+                    if i["fields"].get("customfield_10014") not in excluded_epics]
+        if before3 != len(filtered):
+            print(f"  ⚙️  Excluded {before3 - len(filtered)} ticket(s) via epic ExcludeFromLeadTime"
+                  f" → {len(filtered)} remaining")
+
     return filtered
 
 
@@ -755,6 +796,7 @@ def run_report(week_end_date=None):
     print(f"    Period: {start} → {end}")
     print("=" * 60)
     print("⚙️  Filter: SP > 0 OR Fix Version · Epics, Bugs, Defects & Discarded excluded")
+    print("⚙️  ExcludeFromLeadTime label on ticket OR epic → excluded")
     print("⚙️  Done = Done / Closed / Resolved / Ready for Production")
     print("⚙️  Inactive = To Do / Ready / Ready for Testing / Backlog etc.")
     print("=" * 60)
