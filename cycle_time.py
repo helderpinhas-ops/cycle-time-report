@@ -49,10 +49,11 @@ EXCLUDED_ISSUE_TYPES = {"epic", "bug", "defect"}
 INACTIVE_STATUSES = {
     "to do", "open", "backlog", "new",
     "selected for development", "ready",
-    "ready for testing",   # waiting for QA — NOT active work
+    "ready for testing",    # waiting for QA — NOT active work (single space)
+    "ready for  testing",   # DTAL variant with double space
 }
 # Both "blocked" AND "test blocked" excluded from cycle time, tracked separately
-BLOCKED_STATUSES = {"blocked", "test blocked"}
+BLOCKED_STATUSES = {"blocked", "test blocked", "release blocked"}
 DONE_STATUSES    = {"done", "closed", "resolved", "ready for production"}
 
 AUTH    = (JIRA_EMAIL, JIRA_TOKEN)
